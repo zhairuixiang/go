@@ -1,0 +1,189 @@
+#!/bin/env python
+# -*- coding: UTF-8 -*-
+# Version: 2.0
+# Datetime: 2019-09-10
+# Description: ls命令实现
+
+import argparse
+from pathlib import Path
+from functools import wraps
+import inspect
+
+# 获取一个参数解析器
+parser = argparse.ArgumentParser(prog='ls', add_help=False, description='List information about the FILEs (the current directory by default).')
+parser.add_argument('path', type=Path, nargs='?', default='.', help='file path')
+parser.add_argument('-a', '--all', dest='listall', action='store_true', help='Show all files containing hidden files')
+parser.add_argument('-h', '--human-readable', dest='human', action='store_true', help='with -l, print sizes in human readable format (e.g., 1K 234M 2G)')
+parser.add_argument('-l', dest='detail', action='store_true', help='use a long listing format')
+parser.add_argument('-i', '--inode', dest='inode', action='store_true', help='print the index number of each file')
+parser.add_argument('-d', '--directory', dest='directory', action='store_true', help='list directories themselves, not their contents')
+parser.add_argument('-r', '--reverse', dest='reverse', action='store_true', help='reverse order while sorting')
+parser.add_argument('--help', action='store_true', help='display this help and exit')
+
+def checktype(func):
+	@wraps(func)   ## _checktype = wraps(func)(_checktype)
+	def _checktype(*args, **kwargs):
+		'''检查函数参数类型是否与注解一致,如果不一致抛出异常'''
+		sig = inspect.signature(func)
+		params = sig.parameters
+		keys = list(params.keys())
+
+		def _checkparams(key): 
+			'''检查参数类型'''
+			annotation = params[key].annotation
+			if annotation is not inspect._empty and not isinstance(v, annotation):
+				raise TypeError('{} is not {}'.format(v, annotation))
+				
+		###检查位置参数
+		for k,v in enumerate(args):
+			k = keys[k]
+			_checkparams(k)
+
+		###检查关键字参数
+		for k,v in kwargs.items():
+			_checkparams(k)
+
+		ret = func(*args, **kwargs)
+		return ret
+	return _checktype
+
+
+def listdir(path:Path, listall:bool=False, detail:bool=False, human:bool=False, inode:bool=False, directory:bool=False, reverse:bool=False, help:bool=False):
+	'''ls命令功能实现'''
+
+	@checktype  # => _getmode = checktype(_getmode)
+	def _getmode(mode:int) -> str:
+		'''获取文件权限'''
+		ret = ''
+		for i,m in zip(bin(mode)[-9:], 'rwxrwxrwx'):
+			if int(i):
+				ret += m
+			else:
+				ret += '-'
+		return ret
+
+	@checktype  # => _getmode2 = checktype(_getmode2)
+	def _getmode2(mode:int) -> str:
+		'''获取文件权限'''
+		modelist = ['r', 'w', 'x', 'r', 'w', 'x', 'r', 'w', 'x']
+		m = mode & 0o777
+		ret = ''
+		for i,v in enumerate(bin(m)[-9:]):
+			if v == '1':
+				ret += modelist[i]
+			else:
+				ret += '-'
+		return ret
+
+	@checktype  # => _getmode3 = checktype(_getmode3)
+	def _getmode3(mode:int) -> str:
+		'''获取文件权限'''
+		modelist = dict(zip(range(9), ['r', 'w', 'x', 'r', 'w', 'x', 'r', 'w', 'x']))
+		m = mode & 0o777
+		ret = ''
+		for i in range(8, -1, -1):
+			if m >> i & 1:
+				ret += modelist[8-i]
+			else:
+				ret += '-'
+		return ret
+		
+	@checktype  # => _getfiletype = checktype(_getfiletype)
+	def _getfiletype(f:Path) -> str:
+		'''获取文件类型'''
+		if f.is_symlink():
+			return 'l'
+		elif f.is_block_device():
+			return 'b'
+		elif f.is_char_device():
+			return 'c'
+		elif f.is_socket():
+			return 's'
+		elif f.is_fifo():
+			return 'p'
+		elif f.is_dir():
+			return 'd'
+		else:
+			return '-'
+	
+	@checktype  # => _getowner = checktype(_getowner)
+	def _getowner(uid:int) -> str:
+		'''获取文件属主'''
+		from pwd import getpwuid
+		return getpwuid(uid).pw_name
+	
+	@checktype  # => _getgroup = checktype(_getgroup)
+	def _getgroup(gid:int) -> str:
+		'''获取文件属组'''
+		from grp import getgrgid
+		return getgrgid(gid).gr_name
+
+	@checktype  # => _gethuman = checktype(_gethuman)
+	def _gethuman(size:int) -> str:
+		'''文件大小以单位的形式显示'''
+		units = ' KMGTP'
+		for i in units:
+			if size >= 1024:
+				size = round(size / 1024, 1)
+			else:
+				return str(size) + i
+
+	@checktype  # => _gethuman2 = checktype(_gethuman2)
+	def _gethuman2(size:int) -> str:
+		'''文件大小以单位的形式显示'''
+		units = ' KMGTP'
+		depth = 0
+		while size >= 1024:
+			size = round(size / 1024, 1)
+			depth += 1
+		return '{}{}'.format(size, units[depth])
+
+	@checktype  # => _getdatetime = checktype(_getdatetime)
+	def _getdatetime(mtime:int) -> str:
+		'''获取文件修改时间'''
+		from datetime import datetime
+		return '{0:%b} {0:%d} {0:%H}:{0:%M}'.format(datetime.fromtimestamp(mtime))
+
+	@checktype  # => _details = checktype(_details)
+	def _details(path:Path, human:bool=False, inode:bool=False, abspath:bool=False) -> tuple:
+		'''列出文件详细信息'''
+		st = path.stat()
+		#-rw-rw-r-- 1 python python  996 Aug 23 16:02 test
+		ret = (_getfiletype(path) + _getmode3(st.st_mode), st.st_nlink, _getowner(st.st_uid), _getgroup(st.st_gid),
+               _gethuman2(st.st_size) if human else st.st_size, _getdatetime(int(st.st_mtime)), str(path) if abspath else str(path.name))
+		if inode:
+			ret = (st.st_ino,) + ret
+		return ret
+
+	@checktype  # => _listdir = checktype(_listdir)
+	def _listdir(path:Path, listall:bool=False, detail:bool=False, human:bool=False, inode:bool=False, directory:bool=False, help:bool=False):
+		'''列出目录或文件'''
+		if help:
+			parser.print_help()
+			exit(0)
+	
+		#path = Path(path)
+		if (path.is_dir() and directory) or (not path.is_dir()):
+			if detail:
+				yield _details(path, human, inode, abspath=True)
+			else:
+				yield str(path)
+			return
+
+		for f in path.iterdir():
+			if not listall and str(f.name).startswith('.'):
+				continue
+			if detail:
+				yield _details(f, human, inode)
+			else:
+				yield f.name
+	
+	# 排序
+	yield from sorted(_listdir(path, listall, detail, human, inode, directory, help), key=lambda x: x[-1], reverse=True if reverse else False)
+
+if __name__ == '__main__':
+	args = parser.parse_args()
+	#print(args)
+	files = listdir(args.path, args.listall, args.detail, args.human, args.inode, args.directory, args.reverse, args.help)
+	for file in files:
+		print(file)
